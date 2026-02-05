@@ -13,7 +13,7 @@ import os
 
 import multiprocessing as mp
 import time
-import typing
+from typing import Optional
 from pathlib import Path
 
 import heapq
@@ -31,7 +31,7 @@ def preprocess_and_wordfreqs(text, tokenizer):
     
 class BPE():
     
-    def __init__(self, dataset: str, vocab_size: int = 50257):
+    def __init__(self, dataset: Optional[str], vocab_size: int = 50257):
         self.dataset = dataset
         self.vocab_size = vocab_size
         self._pretokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -66,7 +66,7 @@ class BPE():
             print("VOCAB AND MERGE FILES DON'T EXIST!!")
 
 
-    def create_vocab_and_merge(self, chunk_size):
+    def create_vocab_and_merge(self):
         tokenizer = AutoTokenizer.from_pretrained('gpt2')
         dataset = load_dataset(f'{self.dataset}', streaming=True)
         corpus = dataset['train']
@@ -81,9 +81,12 @@ class BPE():
             text = dic['text']
             processed_county = preprocess_and_wordfreqs(text, tokenizer=tokenizer)
             word_freqs.update(processed_county)
-            
-            if index > 0 and index % 1000000 == 0:
-                break
+
+            if index > 0 and index % 100 == 0:
+                print(f"ON CURRENT DOCUMENT: {index}")
+
+        print("SUCCESSFULLY CREATED WORD_FREQS!")
+        print(len(word_freqs))
 
         for token, freq in word_freqs.items():
             symbols.append(list(token))
@@ -117,6 +120,8 @@ class BPE():
         num_merges = self.vocab_size - len(vocab)
 
         while i < num_merges:
+            if i > 0 and i % 100 == 0:
+                print(f"ON RUN {i}")
             popped_node = heapq.heappop(heap_of_pairs) #looks like: (-frequency, pair)
             while -pair_counts[popped_node[-1]] != popped_node[-2]: #staleness check. Check to see if freq of heap node for a pair matches global pair_counts freq for that pair
                 popped_node = heapq.heappop(heap_of_pairs)
@@ -198,6 +203,6 @@ class BPE():
 
 if __name__ == '__main__':
 
-    bpe = BPE('Skylion007/openwebtext', 50257)
-
-    bpe.create_vocab_and_merge(chunk_size=1000)
+    #bpe = BPE('Skylion007/openwebtext', 50257)
+    #bpe.create_vocab_and_merge()
+    pass
