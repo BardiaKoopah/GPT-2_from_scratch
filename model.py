@@ -5,7 +5,7 @@ from math import sqrt
 import random
 
 global_device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print(global_device)
+#print(global_device)
 random.seed(69)
 
 
@@ -112,12 +112,12 @@ class LayerNorm(nn.Module):
         self.seq_len = seq_len
         self.d_model = d_model
         self.eps = eps
-        self.gamma = nn.Parameter(torch.randn(seq_len, d_model)).to(device=device)
-        self.beta = nn.Parameter(torch.randn(seq_len, d_model)).to(device=device)
+        self.gamma = nn.Parameter(torch.ones(d_model, device=device))
+        self.beta  = nn.Parameter(torch.zeros(d_model, device=device))
 
 
     def forward(self, x):
-        z = (x - torch.mean(x)) / ((torch.var(x) + self.eps) ** .5)
+        z = (x - torch.mean(x, dim=-1, keepdim=True)) / ((torch.var(x, dim=-1, keepdim=True, unbiased=False) + self.eps) ** .5)
         y = (z * self.gamma) + self.beta
         return y
 
@@ -204,7 +204,7 @@ class FullGPT(nn.Module):
         
         return logits
 
-
+"""
 vocab_size = 10
 d_model = 128
 seq_len = 4
@@ -230,3 +230,4 @@ outy = F.dropout(pwffn_output, p=.1)
 full_gpt = FullGPT(vocab_size=vocab_size, seq_len=seq_len, d_model=d_model, num_heads=8, mask=1)
 print(full_gpt(example).shape)
 
+"""
