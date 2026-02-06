@@ -5,7 +5,7 @@ from datasets import load_dataset
 from datasets import load_dataset_builder
 from datasets import get_dataset_split_names
 from tokenizers import Tokenizer
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GPT2Tokenizer
 
 from collections import defaultdict, Counter
 import itertools
@@ -35,6 +35,9 @@ class BPE():
         self.dataset = dataset
         self.vocab_size = vocab_size
         self._pretokenizer = AutoTokenizer.from_pretrained("gpt2")
+        self._gpt2_slow = GPT2Tokenizer.from_pretrained("gpt2")
+        self._byte_decoder = self._gpt2_slow.byte_decoder
+        self.byte_alphabet = list(self._gpt2_slow.byte_encoder.values())
 
         vocab_file_path = 'BPE_stuff/vocab.json'
         merge_file_path = 'BPE_stuff/merges.txt'
@@ -65,6 +68,10 @@ class BPE():
         else:
             print("VOCAB AND MERGE FILES DON'T EXIST!!")
 
+    def to_byte_unicode(self, s):
+        b = s.encode("utf-8")
+        return [self._gpt2_slow.byte_encoder[byte] for byte in b]
+
 
     def create_vocab_and_merge(self):
         tokenizer = AutoTokenizer.from_pretrained('gpt2')
@@ -89,19 +96,10 @@ class BPE():
         print(len(word_freqs))
 
         for token, freq in word_freqs.items():
-            symbols.append(list(token))
+            symbols.append(self.to_byte_unicode(token))
             freqs.append(freq)
-        
-        alphabet = set()
 
-        for word in word_freqs.keys():
-            for letter in word:
-                    alphabet.add(letter)
-
-        sorted_alphabet = list(alphabet)
-        sorted_alphabet.sort()
-
-        vocab = ["<|endoftext|>"] + sorted_alphabet.copy()
+        vocab = ["<|endoftext|>"] + self.byte_alphabet
         merge_list_rules = []
 
         for seq_id in range(len(symbols)):
@@ -170,6 +168,7 @@ class BPE():
         while i < len(split)-1:
             if (split[i], split[i+1]) == pair:
                 split[i:i+2] = [''.join(pair)]
+                i = max(i - 1, 0)
             i += 1
         return split
 
@@ -199,10 +198,27 @@ class BPE():
         return tokenized
 
     def decode(self, ids):
-        return self._pretokenizer.decode(ids)
+        toks = [self.id_to_token[i] for i in ids]
+        text = "".join(toks)
+        byte_arr = bytearray([self._byte_decoder[c] for c in text])
+        return byte_arr.decode("utf-8", errors="replace")
 
 if __name__ == '__main__':
 
     #bpe = BPE('Skylion007/openwebtext', 50257)
     #bpe.create_vocab_and_merge()
-    pass
+    
+    bpe = BPE('test')
+    tests = [
+    " café",
+    "naïve",
+    "hello🙂",
+    "— em dash —",
+    " tabs\tand\nnewlines "
+    ]
+
+    for t in tests:
+        ids = bpe.tokenize(t)
+        out = bpe.decode(ids)
+        print(repr(t), "->", repr(out))
+
