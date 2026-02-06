@@ -36,7 +36,9 @@ class PositionalEmbedding(nn.Module):
 
     def __init__(self, seq_len: int, d_model: int, device=global_device) -> None:
         super().__init__()
-        self.PE = nn.Parameter(torch.randn(seq_len, d_model).to(device).unsqueeze(0))
+        self.PE = nn.Parameter(torch.empty(1, seq_len, d_model, device=device))
+        nn.init.normal_(self.PE, mean=0.0, std=0.02)
+
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return input + self.PE
@@ -49,13 +51,12 @@ class MultiHeadAttention(nn.Module):
     Shape Returned: [batch_size, seq_len, d_model]
     """
 
-    def __init__(self, seq_len, d_model, num_heads, mask, device=global_device):
+    def __init__(self, seq_len, d_model, num_heads, device=global_device):
         super().__init__()
         self.seq_len = seq_len
         self.d_model = d_model
         self.d_k = d_model // num_heads
         self.num_heads = num_heads
-        self.mask = mask
         scale = 1 / sqrt(12)
 
         self.Wq = nn.Linear(d_model, d_model, bias=False, device=device)
@@ -63,6 +64,9 @@ class MultiHeadAttention(nn.Module):
         self.Wv = nn.Linear(d_model, d_model, bias=False, device=device)
         self.Wo = nn.Linear(num_heads * self.d_k, d_model, bias=False, device=device)
         self.attn_dropout = nn.Dropout(p=0.1)
+
+        mask_matrix = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1).view(1, 1, seq_len, seq_len)
+        self.register_buffer("causal_mask", mask_matrix)
         with torch.no_grad():
             self.Wo.weight.mul_(scale)
 
@@ -70,9 +74,7 @@ class MultiHeadAttention(nn.Module):
 
         first_mul = torch.div(Q @ K.mT, d_k ** .5)
 
-        mask_matrix = torch.triu(torch.full(first_mul.shape, float('-inf')), diagonal=1).to(global_device)
-
-        masked = first_mul + mask_matrix
+        masked = first_mul + self.causal_mask
 
         attention = F.softmax(masked, dim=-1)
 
@@ -82,7 +84,7 @@ class MultiHeadAttention(nn.Module):
 
         return attention, out
 
-    def forward(self, X, mask=False):
+    def forward(self, X):
         Q = self.Wq(X)
         K = self.Wk(X)
         V = self.Wv(X)
@@ -107,9 +109,8 @@ class LayerNorm(nn.Module):
     Shape Returned: [batch_size, seq_len, d_model]
     """
 
-    def __init__(self, seq_len, d_model, eps=1e-05, device=global_device):
+    def __init__(self, d_model, eps=1e-05, device=global_device):
         super().__init__()
-        self.seq_len = seq_len
         self.d_model = d_model
         self.eps = eps
         self.gamma = nn.Parameter(torch.ones(d_model, device=device))
@@ -153,16 +154,15 @@ class DecoderBlock(nn.Module):
 
     """
 
-    def __init__(self, seq_len, d_model, num_heads, mask):
+    def __init__(self, seq_len, d_model, num_heads):
         super().__init__()
         self.seq_len = seq_len
         self.d_model = d_model
         self.num_heads = num_heads
-        self.mask = mask
 
-        self.masked_multi_self_attention = MultiHeadAttention(seq_len=seq_len, d_model=d_model, num_heads=num_heads, mask=mask)
-        self.layer_norm_one = LayerNorm(seq_len=seq_len, d_model=d_model)
-        self.layer_norm_two = LayerNorm(seq_len=seq_len, d_model=d_model)
+        self.masked_multi_self_attention = MultiHeadAttention(seq_len=seq_len, d_model=d_model, num_heads=num_heads)
+        self.layer_norm_one = LayerNorm(d_model=d_model)
+        self.layer_norm_two = LayerNorm(d_model=d_model)
         self.feed_forward = PositionWiseFFN(seq_len=seq_len, d_model=d_model)
         self.resid_dropout = nn.Dropout(p=0.1)
 
@@ -180,13 +180,13 @@ class FullGPT(nn.Module):
     Includes weight tying at the end to return output back to original vocab space (logits).
     """
 
-    def __init__(self, vocab_size, seq_len, d_model, num_heads, mask):
+    def __init__(self, vocab_size, seq_len, d_model, num_heads):
         super().__init__()
         self.d_model = d_model
-        self.layer_norm = LayerNorm(seq_len=seq_len, d_model=d_model)
+        self.layer_norm = LayerNorm(d_model=d_model)
         self.embedding = TextEmbedding(vocab_size, d_model)
         self.PE = PositionalEmbedding(seq_len, d_model)
-        self.decoders = nn.ModuleList([DecoderBlock(seq_len=seq_len, d_model=d_model, num_heads=num_heads, mask=mask) for _ in range(12)])
+        self.decoders = nn.ModuleList([DecoderBlock(seq_len=seq_len, d_model=d_model, num_heads=num_heads) for _ in range(12)])
         self.embd_dropout = nn.Dropout(p=0.1)
 
     def forward(self, x):
@@ -200,7 +200,7 @@ class FullGPT(nn.Module):
         
         final_decoder_output_ln = self.layer_norm(final_decoder_output)
 
-        logits = (final_decoder_output_ln @ self.embedding.embedded.weight.t()) * (1.0 / sqrt(self.d_model))
+        logits = (final_decoder_output_ln @ self.embedding.embedded.weight.t())
         
         return logits
 
