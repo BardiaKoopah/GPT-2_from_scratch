@@ -89,7 +89,7 @@ class BPE():
             processed_county = preprocess_and_wordfreqs(text, tokenizer=tokenizer)
             word_freqs.update(processed_county)
 
-            if index > 0 and index % 100 == 0:
+            if index > 0 and index % 100000 == 0:
                 print(f"ON CURRENT DOCUMENT: {index}")
 
         print("SUCCESSFULLY CREATED WORD_FREQS!")
@@ -155,10 +155,10 @@ class BPE():
         
         vocab_dict = {token: idx for idx, token in enumerate(vocab)}
 
-        with open("vocab.json", "w", encoding="utf-8") as f:
+        with open("BPE_stuff/vocab.json", "w", encoding="utf-8") as f:
             json.dump(vocab_dict, f, ensure_ascii=False)
         
-        with open("merges.txt", "w", encoding="utf-8") as f:
+        with open("BPE_stuff/merges.txt", "w", encoding="utf-8") as f:
             f.write("#version: 0.2\n")
             for a, b in merge_list_rules:
                 f.write(f"{a} {b}\n")
@@ -176,7 +176,7 @@ class BPE():
     def tokenize(self, text):
         words_with_offsets = self._pretokenizer.backend_tokenizer.pre_tokenizer.pre_tokenize_str(text)
         new_words = [word for word, offset in words_with_offsets]
-        split_words = [[letter for letter in w] for w in new_words]
+        split_words = [self.to_byte_unicode(w) for w in new_words]
         new_splits = []
 
         # self.pair_to_rank -> {('a', 'b') : 1, ('cr', 'y') : 2, ('b', 'ad') : 1}
@@ -208,17 +208,8 @@ if __name__ == '__main__':
     #bpe = BPE('Skylion007/openwebtext', 50257)
     #bpe.create_vocab_and_merge()
     
-    bpe = BPE('test')
-    tests = [
-    " café",
-    "naïve",
-    "hello🙂",
-    "— em dash —",
-    " tabs\tand\nnewlines "
-    ]
-
-    for t in tests:
-        ids = bpe.tokenize(t)
-        out = bpe.decode(ids)
-        print(repr(t), "->", repr(out))
+    bpe = BPE("test")
+    s = "Traditional stocks made from a single piece of timber , or laminated stocks."
+    ids = bpe.tokenize(s)
+    print("decoded:", bpe.decode(ids))
 
