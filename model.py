@@ -21,6 +21,7 @@ class TextEmbedding(nn.Module):
     def __init__(self, vocab_size: int, d_model: int) -> None:
         super().__init__()
         self.embedded = nn.Embedding(vocab_size, d_model, device=global_device)
+        nn.init.normal_(self.embedded.weight, mean=0.0, std=0.02)
         
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         assert input.device == next(self.embedded.parameters()).device
@@ -57,18 +58,27 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.d_k = d_model // num_heads
         self.num_heads = num_heads
-        scale = 1 / sqrt(12)
+        scale = 1 / sqrt(num_heads)
 
         self.Wq = nn.Linear(d_model, d_model, bias=False, device=device)
         self.Wk = nn.Linear(d_model, d_model, bias=False, device=device)
         self.Wv = nn.Linear(d_model, d_model, bias=False, device=device)
         self.Wo = nn.Linear(num_heads * self.d_k, d_model, bias=False, device=device)
+        """
+        nn.init.normal_(self.Wq, mean=0.0, std=0.02)
+        nn.init.normal_(self.Wk, mean=0.0, std=0.02)
+        nn.init.normal_(self.Wv, mean=0.0, std=0.02)
+        nn.init.normal_(self.Wo, mean=0.0, std=0.02)
+        """
+
         self.attn_dropout = nn.Dropout(p=0.1)
 
-        mask_matrix = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1).view(1, 1, seq_len, seq_len)
+        mask_matrix = torch.triu(torch.full((seq_len, seq_len), float('-inf')), diagonal=1).view(1, 1, seq_len, seq_len).to(device=device)
         self.register_buffer("causal_mask", mask_matrix)
+        """
         with torch.no_grad():
             self.Wo.weight.mul_(scale)
+        """
 
     def sdpa(self, Q, K, V, d_k):
 
@@ -96,7 +106,6 @@ class MultiHeadAttention(nn.Module):
         V = (torch.reshape(V, (B, S, H, dh))).transpose(1, 2)
 
         attention, output = self.sdpa(Q, K, V, self.d_k)
-        print(output.shape)
 
         reshaped = (torch.transpose(output, 1, 2)).reshape(B, S, H * dh)
         
@@ -138,6 +147,8 @@ class PositionWiseFFN(nn.Module):
 
         self.W1 = nn.Linear(d_model, inner_dimension, bias=True, device=device)
         self.W2 = nn.Linear(inner_dimension, d_model, bias=True, device=device)
+        
+        
         with torch.no_grad():
             self.W2.weight.mul_(scale)
 
