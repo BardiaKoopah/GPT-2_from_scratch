@@ -33,12 +33,97 @@ def build_token_pool(split_texts, eos_id, bpe):
     
     return tokens_1d
 
+@torch.no_grad()
+def eval_ppl_stream(model, tokens, seq_len, device):
+    model.eval()
+    total_nll = 0.0
+    total_tokens = 0
+
+    ids = torch.tensor(tokens, dtype=torch.long)
+
+    for i in range(0, len(ids) - 1, seq_len):
+        x = ids[i:i+seq_len]
+        y = ids[i+1:i+seq_len+1]
+
+        if x.numel() < seq_len or y.numel() < seq_len:
+            continue
+
+        x = x.to(device)
+        y = y.to(device)
+
+        logits = model(x.unsqueeze(0))
+        V = logits.size(-1)
+
+        loss = F.cross_entropy(
+            logits.view(-1, V),
+            y.view(-1),
+            reduction="sum"
+        )
+
+        total_nll += loss.item()
+        total_tokens += y.numel()
+
+    avg_nll = total_nll / total_tokens
+    ppl = math.exp(avg_nll)
+
+    model.train()
+    return avg_nll, ppl
+
+def strip_at_eos(ids, eos_id):
+    out = []
+    for t in ids:
+        if t == eos_id:
+            break
+        out.append(t)
+    return out
+
+def sample_next(logits_1d, temperature=1.0, top_k=50):
+    temperature = max(float(temperature), 1e-8)
+    logits_1d = logits_1d / temperature
+
+    if top_k is not None:
+        top_k = min(int(top_k), logits_1d.numel())
+        v, ix = torch.topk(logits_1d, top_k)
+        masked = torch.full_like(logits_1d, float("-inf"))
+        masked.scatter_(0, ix, v)
+        logits_1d = masked
+
+    probs = torch.softmax(logits_1d, dim=-1)
+    return torch.multinomial(probs, 1).item()
+
+@torch.no_grad()
+def generate(model, prompt_ids, max_new_tokens, seq_len, device, temperature=1.0, top_k=50, eos_id=None):
+    model.eval()
+    ids = list(prompt_ids)
+
+    for _ in range(max_new_tokens):
+        ctx = ids[-seq_len:]
+        x = torch.tensor(ctx, dtype=torch.long, device=device).unsqueeze(0)
+
+        logits = model(x)
+        next_logits = logits[0, -1]
+        next_id = sample_next(next_logits, temperature=temperature, top_k=top_k)
+
+        ids.append(next_id)
+        if eos_id is not None and next_id == eos_id:
+            break
+
+    model.train()
+    return ids
+
+def pretty(text: str) -> str:
+    return (
+        text.replace("Ġ", " ")
+            .replace("\t", "\\t")
+            .replace("\n", "\\n\n")
+    )
+
 
 def training_loop():
     total_updates = 100000
 
     bpe = BPE('test')
-    gpt2 = FullGPT(vocab_size=50257, seq_len=128, d_model=512, num_heads=8)
+    gpt2 = FullGPT(vocab_size=50257, seq_len=128, d_model=768, num_heads=12)
 
     yes_decay = []
     no_decay = []
@@ -74,7 +159,6 @@ def training_loop():
 
     gpt2.train()
     for i in range(total_updates):
-        print(f"ON {i}")
         train_inputs, train_labels = train_loader.__call__()
         optimizer.zero_grad()
 
@@ -93,42 +177,39 @@ def training_loop():
 
 
         if i > 0 and i % 300 == 0:
-            
+            val_loss, val_ppl = eval_ppl_stream(gpt2, valid_tokens, 128, global_device)
+            print(f"VAL STREAM NLL: {val_loss:.4f} | VAL STREAM PPL: {val_ppl:.2f}")
+
             gpt2.eval()
             with torch.no_grad():
                 valid_inputs, valid_labels = valid_loader.__call__()
-
                 logits = gpt2(valid_inputs)
-                V = logits.shape[-1]
 
-                sample_index = 6 #sample index
-                target_seq = valid_labels[sample_index].detach().cpu().tolist()
-                pred_seq = logits[sample_index].argmax(dim=-1).detach().cpu().tolist()
+                sample_index = 0
+                prompt_ids = valid_inputs[sample_index].detach().cpu().tolist()
+                tgt_ids = valid_labels[sample_index].detach().cpu().tolist()
+                pred_ids = logits[sample_index].argmax(dim=-1).detach().cpu().tolist()
 
-                def strip(ids):
-                    out = []
-                    for t in ids:
-                        if t == eos:
-                            break
-                        out.append(t)
-                    return out
-                
-                target_seq_cleaned = strip(target_seq)
-                pred_seq_cleaned = strip(pred_seq)
-
-                target_text = bpe.decode(target_seq_cleaned)
-                pred_text = bpe.decode(pred_seq_cleaned)
-
-                print("\n=== SAMPLE ===")
-                print("TGT: ", target_text)
-                print("PRED:", pred_text)
-
-        
-                loss_fn = torch.nn.CrossEntropyLoss()
-                valid_loss = loss_fn(logits.reshape(-1, V), valid_labels.reshape(-1))
-
-                print(f'UPDATE: {i} | VALIDATION LOSS: {valid_loss.item()} | VALIDATION PPL: {exp(min(20, valid_loss.item()))}')
+                print("\n=== TEACHER-FORCED ===")
+                print("PROMPT:", pretty(bpe.decode(strip_at_eos(prompt_ids, eos))))
+                print("TGT   :", pretty(bpe.decode(strip_at_eos(tgt_ids, eos))))
+                print("PRED  :", pretty(bpe.decode(strip_at_eos(pred_ids, eos))))
 
             gpt2.train()
+
+            print("\n=== GENERATION ===")
+            gen_ids = generate(
+                model=gpt2,
+                prompt_ids=prompt_ids,
+                max_new_tokens=80,
+                seq_len=128,
+                device=global_device,
+                temperature=1.0,
+                top_k=50,
+                eos_id=eos
+            )
+            print("GEN:", pretty(bpe.decode(strip_at_eos(gen_ids, eos))))
+            print()
+
 
 training_loop()
