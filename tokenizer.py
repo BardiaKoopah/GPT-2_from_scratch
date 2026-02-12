@@ -207,9 +207,5 @@ if __name__ == '__main__':
 
     #bpe = BPE('Skylion007/openwebtext', 50257)
     #bpe.create_vocab_and_merge()
-    
-    bpe = BPE("test")
-    s = "Traditional stocks made from a single piece of timber , or laminated stocks."
-    ids = bpe.tokenize(s)
-    print("decoded:", bpe.decode(ids))
-
+    """
+    """               
